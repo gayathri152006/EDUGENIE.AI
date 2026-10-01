@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduGenie</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>Welcome to EduGenie 🧠✨</h1>
+  <p class="sub">Your personal AI tutor for learning support.</p>
+
+  <form id="form" class="panel">
+    <label for="task">What do you need?</label>
+    <select id="task">
+      <option value="qa">Ask a question</option>
+      <option value="explain">Explain a concept</option>
+      <option value="summary">Summarize a passage</option>
+      <option value="quiz">Generate a quiz</option>
+      <option value="path">Get a learning path</option>
+    </select>
+    <label for="input" id="inputLabel">Your question</label>
+    <textarea id="input" placeholder="Which is the largest ocean?" required></textarea>
+    <button type="submit" id="go">Get answer</button>
+  </form>
+
+  <section id="result" class="panel" aria-live="polite"></section>
+</main>
+
+<script>
+const TASKS = {
+  qa:      {label: "Your question",      ph: "Which is the largest ocean?",  btn: "Get answer"},
+  explain: {label: "Concept to explain", ph: "Photosynthesis",               btn: "Explain"},
+  summary: {label: "Text to summarize",  ph: "Paste a long passage here…",   btn: "Summarize"},
+  quiz:    {label: "Topic or passage",   ph: "Pythagoras theorem",           btn: "Generate quiz"},
+  path:    {label: "Topic to learn",     ph: "SQL",                          btn: "Build learning path"}
+};
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+$("task").addEventListener("change", () => {
+  const t = TASKS[$("task").value];
+  $("inputLabel").textContent = t.label; $("input").placeholder = t.ph; $("go").textContent = t.btn;
+});
+
+const inline = s => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
+// Minimal Markdown renderer (headings, bold, bullets) for Gemini output
+function md(src) {
+  let html = "", inList = false;
+  for (const line of esc(src).split("\n")) {
+    const b = line.match(/^\s*[*-]\s+(.*)/), h = line.match(/^(#{1,4})\s+(.*)/);
+    if (b) { if (!inList) { html += "<ul>"; inList = true; } html += "<li>" + inline(b[1]) + "</li>"; continue; }
+    if (inList) { html += "</ul>"; inList = false; }
+    if (h) html += `<h${h[1].length + 2}>${inline(h[2])}</h${h[1].length + 2}>`;
+    else if (line.trim()) html += "<p>" + inline(line) + "</p>";
+  }
+  return html + (inList ? "</ul>" : "");
+}
+
+function show(title, html) {
+  $("result").style.display = "block";
+  $("result").innerHTML = `<h2>${title}</h2>${html}`;
+}
+
+function renderQuiz(quiz) {
+  show("Quiz", "");
+  quiz.forEach((q, i) => {
+    const d = document.createElement("div"); d.className = "q";
+    d.innerHTML = `<b>Q${i + 1}:</b> ${esc(q.question)}` + q.options.map(o =>
+      `<label class="opt"><input type="radio" name="q${i}" value="${esc(o)}"> ${esc(o)}</label>`).join("") +
+      `<button type="button">Check answer</button><div class="fb"></div>`;
+    d.querySelector("button").onclick = () => {
+      const pick = d.querySelector("input:checked"), fb = d.querySelector(".fb");
+      if (!pick) { fb.className = "fb bad"; fb.textContent = "Pick an option first."; return; }
+      const ok = pick.value === esc(q.answer);
+      fb.className = "fb " + (ok ? "ok" : "bad");
+      fb.textContent = ok ? "✅ Correct!" : "❌ Incorrect. Correct answer: " + q.answer;
+    };
+    $("result").appendChild(d);
+  });
+}
+
+async function call(url, opts) {
+  const r = await fetch(url, opts), data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || data.detail || "Request failed (" + r.status + ")");
+  return data;
+}
+const post = (url, body) => call(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const task = $("task").value, v = $("input").value.trim();
+  if (!v) return;
+  $("go").disabled = true; show("Working…", "<p>EduGenie is thinking.</p>");
+  try {
+    if (task === "qa") show("Answer", md((await call("/qa?question=" + encodeURIComponent(v))).answer));
+    else if (task === "explain") show("Explanation", md((await post("/explain", {topic: v})).explanation));
+    else if (task === "summary") show("Summary", md((await post("/summarize", {text: v})).summary));
+    else if (task === "quiz") renderQuiz((await post("/quiz", {text: v})).quiz);
+    else show(`Learning path for "${esc(v)}"`, `<div class="md">${md((await call("/learn/recommendations?topic=" + encodeURIComponent(v))).recommendation)}</div>`);
+  } catch (err) {
+    show("Something went wrong", `<p class="error">${esc(err.message)}</p>`);
+  } finally { $("go").disabled = false; }
+});
+</script>
+</body>
+</html>
